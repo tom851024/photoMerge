@@ -4,7 +4,7 @@ import numpy as np
 
 # 定義滑鼠點擊事件的回調函數
 def get_coordinates(event, x, y, flags, param):
-    global click_count, points_img1, points_img2, current_image, image_copy  # 使用全域變數
+    global click_count, points_img1, points_img2, current_image, image_copy, step  # 使用全域變數
     if event == cv2.EVENT_LBUTTONDOWN:  # 左鍵點擊事件
         click_count += 1  # 增加點擊計數
         print(f"點擊的座標為: x={x}, y={y}")
@@ -13,8 +13,16 @@ def get_coordinates(event, x, y, flags, param):
             points_img1.append((x, y))  # 在第一張圖片上記錄點
             cv2.putText(image_copy, str(click_count), (x, y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        elif current_image == 2:
+        elif current_image == 2 and step == 1:
             points_img2.append((x, y))  # 在第二張圖片上記錄點
+            cv2.putText(image_copy, str(click_count), (x, y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        elif current_image == 2 and step == 2:
+            points_img2_2.append((x, y))  # 在第二張圖片上記錄點
+            cv2.putText(image_copy, str(click_count), (x, y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        elif current_image == 3:
+            points_img3.append((x, y))
             cv2.putText(image_copy, str(click_count), (x, y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
@@ -25,30 +33,32 @@ def get_coordinates(event, x, y, flags, param):
                 current_image = 2
                 image_copy = img2.copy()
                 click_count = 0  # 重置點擊計數
-            elif current_image == 2:
+            elif current_image == 2 and step == 1:
+                print("第一組點選完成: img1 和 img2 對齊")
+                step = 2
+                current_image = 3
+                image_copy = img3.copy()
+                click_count = 0  # 重置點擊計數
+            elif current_image == 3:
+                print("第二組點選完成: img2 和 img3 對齊")
+                current_image = 2
+                image_copy = img2.copy()
+                click_count = 0  # 重置點擊計數
+            elif current_image == 2 and step == 2:
                 # 結束並關閉視窗
                 print("第一張圖片的三個點:", points_img1)
                 print("第二張圖片的三個點:", points_img2)
+                print("第三張圖片的三個點:", points_img3)
 
                 # 計算 affine_matrix
                 affine_matrix = calculate_affine_transform(points_img2, points_img1)
+                affine_matrix2 = calculate_affine_transform(points_img3, points_img2_2)
+
                 print("Affine Matrix:\n", affine_matrix)
+                print("Affine Matrix2:\n", affine_matrix2)
 
-                # 計算畫布大小
-                height, width, _ = img1.shape
-                output_canvas = np.zeros((height * 2, width * 2, 3), dtype=np.uint8)
-
-                # 將目標圖像放在畫布的中心
-                output_canvas[0:height, 0:width] = img1
-
-                # 將來源圖像應用仿射變換並放置在畫布上
-                warped_src_img = cv2.warpAffine(img2, affine_matrix, (width * 2, height * 2))
-                output_canvas = cv2.addWeighted(output_canvas, 1, warped_src_img, 1, 0)
-
-                # 顯示結果
-                cv2.imshow("Merged Image", output_canvas)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
+                 # 合成圖片
+                merge_images(affine_matrix, affine_matrix2)
                 exit()
 
 def calculate_affine_transform(src_points, dst_points):
@@ -74,11 +84,48 @@ def calculate_affine_transform(src_points, dst_points):
     ])
     return affine_matrix
 
+def merge_images(affine_matrix, affine_matrix2):
+    height, width, _ = img1.shape
+    output_canvas = np.zeros((height * 2, width * 2, 3), dtype=np.float32)
+
+    # Step 1: 將 img1 放置於畫布左上角
+    img1_float = img1.astype(np.float32) / 255.0
+    output_canvas[0:height, 0:width] = img1_float
+
+    # Step 2: 仿射變換 img2 並直接疊加到畫布
+    warped_img2 = cv2.warpAffine(img2, affine_matrix, (width * 2, height * 2))
+    warped_img2 = warped_img2.astype(np.float32) / 255.0
+
+    # 直接將 img2 疊加到畫布上
+    output_canvas = np.maximum(output_canvas, warped_img2)
+
+    # Step 3: 仿射變換 img3 並直接疊加到畫布
+    warped_img3 = cv2.warpAffine(img3, affine_matrix2, (width * 2, height * 2))
+    warped_img3 = warped_img3.astype(np.float32) / 255.0
+
+    # 直接將 img3 疊加到畫布上
+    output_canvas = np.maximum(output_canvas, warped_img3)
+
+    # 正規化並顯示合成結果
+    output_canvas = np.clip(output_canvas, 0, 1)
+    output_canvas = (output_canvas * 255).astype(np.uint8)
+
+    # 儲存合成圖片
+    cv2.imwrite("merged_image.jpg", output_canvas)  # 以 JPEG 格式儲存圖片
+    
+    # 顯示結果
+    cv2.imshow("Merged Image", output_canvas)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
 
 click_count = 0
 current_image = 1
 points_img1 = [] #1號照片對應點
-points_img2 = [] #2號照片對應點
+points_img2 = [] #1號照片和2號照片對應點
+points_img2_2 = [] #2號照片和3號照片對應點
+points_img3 = [] #3號照片對應點
+step = 1
 
 img1 = cv2.imread("1.jpg")
 img2 = cv2.imread("2.jpg")
