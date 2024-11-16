@@ -86,24 +86,48 @@ def calculate_affine_transform(src_points, dst_points):
 
 def merge_images(affine_matrix, affine_matrix2):
     height, width, _ = img1.shape
-    output_canvas = np.zeros((height * 2, width * 2, 3), dtype=np.float32)
 
-    # Step 1: 將 img1 放置於畫布左上角
+    # Step 1: 動態計算畫布尺寸，確保所有變換後的圖像都能顯示
+    corners_img2 = [
+        np.dot(affine_matrix, [0, 0, 1]),
+        np.dot(affine_matrix, [width, 0, 1]),
+        np.dot(affine_matrix, [0, height, 1]),
+        np.dot(affine_matrix, [width, height, 1])
+    ]
+
+    corners_img3 = [
+        np.dot(affine_matrix2, [0, 0, 1]),
+        np.dot(affine_matrix2, [width, 0, 1]),
+        np.dot(affine_matrix2, [0, height, 1]),
+        np.dot(affine_matrix2, [width, height, 1])
+    ]
+
+    # 找出所有圖片的最小和最大邊界
+    all_corners = np.array(corners_img2 + corners_img3)
+    min_x = min(np.min(all_corners[:, 0]), 0)
+    max_x = max(np.max(all_corners[:, 0]), width)
+    min_y = min(np.min(all_corners[:, 1]), 0)
+    max_y = max(np.max(all_corners[:, 1]), height)
+
+    # 根據邊界計算畫布大小
+    canvas_width = int(max_x - min_x)
+    canvas_height = int(max_y - min_y)
+    
+    # 創建空白畫布
+    output_canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.float32)
+
+    # Step 2: 將 img1 放置於畫布的對應位置
     img1_float = img1.astype(np.float32) / 255.0
-    output_canvas[0:height, 0:width] = img1_float
+    output_canvas[-int(min_y):height-int(min_y), -int(min_x):width-int(min_x)] = img1_float
 
-    # Step 2: 仿射變換 img2 並直接疊加到畫布
-    warped_img2 = cv2.warpAffine(img2, affine_matrix, (width * 2, height * 2))
+    # Step 3: 仿射變換 img2 並疊加到畫布
+    warped_img2 = apply_affine_transform(img2, affine_matrix, (canvas_width, canvas_height), offset=(-min_x, -min_y))
     warped_img2 = warped_img2.astype(np.float32) / 255.0
-
-    # 直接將 img2 疊加到畫布上
     output_canvas = np.maximum(output_canvas, warped_img2)
 
-    # Step 3: 仿射變換 img3 並直接疊加到畫布
-    warped_img3 = cv2.warpAffine(img3, affine_matrix2, (width * 2, height * 2))
+    # Step 4: 仿射變換 img3 並疊加到畫布
+    warped_img3 = apply_affine_transform(img3, affine_matrix2, (canvas_width, canvas_height), offset=(-min_x, -min_y))
     warped_img3 = warped_img3.astype(np.float32) / 255.0
-
-    # 直接將 img3 疊加到畫布上
     output_canvas = np.maximum(output_canvas, warped_img3)
 
     # 正規化並顯示合成結果
@@ -111,12 +135,53 @@ def merge_images(affine_matrix, affine_matrix2):
     output_canvas = (output_canvas * 255).astype(np.uint8)
 
     # 儲存合成圖片
-    cv2.imwrite("merged_image.jpg", output_canvas)  # 以 JPEG 格式儲存圖片
+    cv2.imwrite("merged_image.jpg", output_canvas)
     
     # 顯示結果
     cv2.imshow("Merged Image", output_canvas)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+def bilinear_interpolation(img, x, y):
+    height, width, channels = img.shape
+    if x < 0 or x >= width - 1 or y < 0 or y >= height - 1:
+        return np.zeros((channels,), dtype=np.float32)
+
+    i, j = int(x), int(y)
+    dx, dy = x - i, y - j
+
+    Q11 = img[j, i]
+    Q21 = img[j, i + 1]
+    Q12 = img[j + 1, i]
+    Q22 = img[j + 1, i + 1]
+
+    interpolated_value = (Q11 * (1 - dx) * (1 - dy) +
+                          Q21 * dx * (1 - dy) +
+                          Q12 * (1 - dx) * dy +
+                          Q22 * dx * dy)
+    return interpolated_value
+
+def apply_affine_transform(img, affine_matrix, output_shape, offset=(0, 0)):
+    output_img = np.zeros((output_shape[1], output_shape[0], 3), dtype=np.float32)
+    height, width = img.shape[:2]
+
+    # 將 2x3 仿射矩陣擴展為 3x3
+    affine_matrix_ext = np.vstack([affine_matrix, [0, 0, 1]])
+
+    # 計算擴展矩陣的逆
+    inverse_affine_matrix = np.linalg.inv(affine_matrix_ext)
+
+    for y in range(output_shape[1]):
+        for x in range(output_shape[0]):
+            # 將畫布座標轉換為原圖座標 (考慮偏移)
+            src_coords = np.dot(inverse_affine_matrix, np.array([x - offset[0], y - offset[1], 1]))
+            src_x, src_y = src_coords[0], src_coords[1]
+
+            # 進行雙線性插值
+            if 0 <= src_x < width - 1 and 0 <= src_y < height - 1:
+                output_img[y, x] = bilinear_interpolation(img, src_x, src_y)
+
+    return output_img
 
 
 click_count = 0
